@@ -1,3 +1,7 @@
+# python3 -m unittest client.py
+# python3 client.py --single_test
+# python3 client.py --run_test
+
 import socket
 import struct
 import argparse
@@ -5,11 +9,14 @@ import messages_pb2
 from h2.connection import H2Connection
 from h2.config import H2Configuration
 import h2
+import itertools
+import unittest
+from parameterized import parameterized
 
 def create_grpc_payload(response_size=10, body_byte=b'\x44',if_msg_test=False):
     req = messages_pb2.SimpleRequest()
     req.response_size = response_size
-    req.payload.body = body_byte * response_size*100
+    req.payload.body = body_byte * response_size
     msg = req.SerializeToString()
     if if_msg_test:
         return b'\x00' + struct.pack(">I", len(msg))    
@@ -18,21 +25,28 @@ def create_grpc_payload(response_size=10, body_byte=b'\x44',if_msg_test=False):
 
 
 def build_headers(method='POST', scheme='https', path='/grpc.testing.TestService/UnaryCall',
-                  authority='localhost:50051', content_type='application/grpc', traliers='trailers'):
+                  authority='localhost:50051', content_type='application/grpc', trailers='trailers'):
     return [
         (':method', method),
         (':scheme', scheme),
         (':path', path),
         (':authority', authority),
         ('content-type', content_type),
-        ('te', traliers),
+        ('te', trailers),
     ]
 
 
 def send_grpc_request(sock, conn, stream_id, headers, payload):
-    conn.send_headers(stream_id, headers)
-    conn.send_data(stream_id, payload, end_stream=True)
-    sock.sendall(conn.data_to_send())
+    try:
+        conn.send_headers(stream_id, headers)
+        conn.send_data(stream_id, payload, end_stream=True)
+        sock.sendall(conn.data_to_send())
+        return True
+    except Exception as e:
+        print("Exception in send_grpc_request: ", e)
+        conn.close_connection()
+        sock.close()
+        return False
 
 
 def receive_grpc_response(sock, conn):
@@ -81,7 +95,7 @@ def receive_grpc_response(sock, conn):
     if status_code is not None and status_code != 0:
         print(f"gRPC error received: grpc-status={status_code}, message='{status_message}'")
 
-    return resp
+    return resp, status_code
 
 
 def decode_response(resp):
@@ -94,26 +108,28 @@ def decode_response(resp):
     response.ParseFromString(resp_payload)
     return response
 
-def grpc_request(method,scheme,path,authority,content_type,traliers,response_size=10,body_byte=b'\x44',if_msg_test=False):
+def grpc_request(method,scheme,path,authority,content_type,trailers,response_size=10,body_byte=b'\x44',if_msg_test=False):
     config = H2Configuration(client_side=True)
     conn = H2Connection(config=config)
     conn.initiate_connection()
     preface = conn.data_to_send()
 
     stream_id = 1  # gRPC uses stream ID 1 for the first request
-    headers = build_headers(method=method, scheme=scheme, path=path, authority=authority, content_type=content_type, traliers=traliers)
+    headers = build_headers(method=method, scheme=scheme, path=path, authority=authority, content_type=content_type, trailers=trailers)
     payload = create_grpc_payload(response_size=response_size, body_byte=body_byte,if_msg_test=if_msg_test)
 
+    status_code = None
     with socket.create_connection(("localhost", 50051)) as sock:
         sock.sendall(preface)
-        send_grpc_request(sock, conn, stream_id, headers, payload)
+        if send_grpc_request(sock, conn, stream_id, headers, payload) == False:
+            return None, None
         try:
-            resp = receive_grpc_response(sock, conn)
+            resp, status_code = receive_grpc_response(sock, conn)
             response = decode_response(resp)
-            return response
+            return response, status_code
         except Exception as e:
             print("Failed to decode response:", e)
-            return None
+            return None, status_code
         
 def single_test():
     config = H2Configuration(client_side=True)
@@ -129,7 +145,7 @@ def single_test():
         sock.sendall(preface)
         send_grpc_request(sock, conn, stream_id, headers, payload)
         try:
-            resp = receive_grpc_response(sock, conn)
+            resp, status_code = receive_grpc_response(sock, conn)
             response = decode_response(resp)
             print("Decoded response:", response)
         except Exception as e:
@@ -142,39 +158,89 @@ def run_test():
     path_list=['/grpc.testing.TestService/UnaryCall','/grpc.testing.TestService/BadUnaryCall']
     authority_list=['localhost']
     content_type_list=['application/grpc', 'application/grpc+proto']
-    traliers_list=['trailers', 'trailers+grpc']
+    trailers_list=['trailers', 'trailers+grpc']
     response_size_list=[10, 100, 500]
     body_byte_list=[b'\x44', b'\x42']
     if_msg_test_list=[True, False]
     
     cnt=0
-    for method in method_list:
-        for scheme in scheme_list:
-            for path in path_list:
-                for authority in authority_list:
-                    for content_type in content_type_list:
-                        for traliers in traliers_list:
-                            for response_size in response_size_list:
-                                for body_byte in body_byte_list:
-                                    for if_msg_test in if_msg_test_list:
-                                        print("\n\nThe test %d is running..." % cnt)
-                                        cnt += 1
-                                        print(f"Testing {method} {scheme} {path} {authority} {content_type} {traliers} {response_size} {body_byte} {if_msg_test}")
-                                        res=grpc_request(
-                                            method=method,
-                                            scheme=scheme,
-                                            path=path,
-                                            authority=authority,
-                                            content_type=content_type,
-                                            traliers=traliers,
-                                            response_size=response_size,
-                                            body_byte=body_byte,
-                                            if_msg_test=if_msg_test
-                                        )
-                                        if res:
-                                            print(f"Received response: {res.payload.body}... (length={len(res.payload.body)})")
-                                        else:
-                                            print("No response received or failed to decode.")
+    for combination in itertools.product(
+        method_list, scheme_list, path_list, authority_list,
+        content_type_list, trailers_list, response_size_list,
+        body_byte_list, if_msg_test_list
+    ):
+        method, scheme, path, authority, content_type, trailers, response_size, body_byte, if_msg_test = combination
+        print("\n\nThe test %d is running..." % cnt)
+        cnt += 1
+        print(f"Testing {method} {scheme} {path} {authority} {content_type} {trailers} {response_size} {body_byte} {if_msg_test}")
+        res, status_code=grpc_request(
+            method=method,
+            scheme=scheme,
+            path=path,
+            authority=authority,
+            content_type=content_type,
+            trailers=trailers,
+            response_size=response_size,
+            body_byte=body_byte,
+            if_msg_test=if_msg_test
+        )
+
+        if res:
+            print(f"Received response: {res.payload.body}... (length={len(res.payload.body)})")
+        else:
+            print("No response received or failed to decode.")
+
+def generate_test_cases():
+    method_list = ['POST', 'GET', 'PUT']
+    scheme_list = ['http']
+    path_list = ['/grpc.testing.TestService/UnaryCall', '/grpc.testing.TestService/BadUnaryCall']
+    authority_list = ['localhost']
+    content_type_list = ['application/grpc', 'application/grpc+proto']
+    trailers_list = ['trailers', 'trailers+grpc']
+    response_size_list = [10]
+    body_byte_list = [b'\x44', b'\x45']
+    if_msg_test_list = [True, False]
+
+    return list(itertools.product(
+        method_list, scheme_list, path_list, authority_list,
+        content_type_list, trailers_list, response_size_list,
+        body_byte_list, if_msg_test_list
+    ))
+
+class TestCombinations(unittest.TestCase):
+    @parameterized.expand(generate_test_cases())
+    def test_combination(self, method, scheme, path, authority,
+        content_type, trailers, response_size,
+        body_byte, if_msg_test
+    ):
+        print(f"Testing {method} {scheme} {path} {authority} {content_type} {trailers} {response_size} {body_byte} {if_msg_test}")
+
+        res, status_code=grpc_request(
+            method=method,
+            scheme=scheme,
+            path=path,
+            authority=authority,
+            content_type=content_type,
+            trailers=trailers,
+            response_size=response_size,
+            body_byte=body_byte,
+            if_msg_test=if_msg_test
+        )
+
+        print("status_code", status_code)
+        if trailers == 'trailers+grpc':
+            self.assertEqual(status_code, None)
+            self.assertEqual(res, None)
+        elif method != "POST":
+            self.assertEqual(status_code, 2) 
+        elif if_msg_test == True:
+            self.assertEqual(status_code, 12) 
+        elif path == '/grpc.testing.TestService/BadUnaryCall':
+            self.assertEqual(status_code, 12)
+        else:
+            self.assertEqual(status_code, 0)
+
+
 def main():
     #arg parser
     parser = argparse.ArgumentParser(description="gRPC client tester")
