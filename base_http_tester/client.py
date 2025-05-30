@@ -1,27 +1,31 @@
 import socket
 import struct
+import argparse
 import messages_pb2
 from h2.connection import H2Connection
 from h2.config import H2Configuration
 import h2
 
-def create_grpc_payload(response_size=10, body_byte=b'\x44'):
+def create_grpc_payload(response_size=10, body_byte=b'\x44',if_msg_test=False):
     req = messages_pb2.SimpleRequest()
     req.response_size = response_size
     req.payload.body = body_byte * response_size*100
     msg = req.SerializeToString()
+    if if_msg_test:
+        return b'\x00' + struct.pack(">I", len(msg))    
     # gRPC frame header: 1 byte compression flag + 4 bytes length prefix
     return b'\x00' + struct.pack(">I", len(msg))+ msg
 
 
-def build_headers(path="/grpc.testing.TestService/UnaryCall"):
+def build_headers(method='POST', scheme='https', path='/grpc.testing.TestService/UnaryCall',
+                  authority='localhost:50051', content_type='application/grpc', traliers='trailers'):
     return [
-        (':method', 'POST'),
-        (':scheme', 'http'),
+        (':method', method),
+        (':scheme', scheme),
         (':path', path),
-        (':authority', 'localhost'),
-        ('content-type', 'application/grpc'),
-        ('te', 'trailers'),
+        (':authority', authority),
+        ('content-type', content_type),
+        ('te', traliers),
     ]
 
 
@@ -90,8 +94,28 @@ def decode_response(resp):
     response.ParseFromString(resp_payload)
     return response
 
+def grpc_request(method,scheme,path,authority,content_type,traliers,response_size=10,body_byte=b'\x44',if_msg_test=False):
+    config = H2Configuration(client_side=True)
+    conn = H2Connection(config=config)
+    conn.initiate_connection()
+    preface = conn.data_to_send()
 
-def main():
+    stream_id = 1  # gRPC uses stream ID 1 for the first request
+    headers = build_headers(method=method, scheme=scheme, path=path, authority=authority, content_type=content_type, traliers=traliers)
+    payload = create_grpc_payload(response_size=response_size, body_byte=body_byte,if_msg_test=if_msg_test)
+
+    with socket.create_connection(("localhost", 50051)) as sock:
+        sock.sendall(preface)
+        send_grpc_request(sock, conn, stream_id, headers, payload)
+        try:
+            resp = receive_grpc_response(sock, conn)
+            response = decode_response(resp)
+            return response
+        except Exception as e:
+            print("Failed to decode response:", e)
+            return None
+        
+def single_test():
     config = H2Configuration(client_side=True)
     conn = H2Connection(config=config)
     conn.initiate_connection()
@@ -111,6 +135,65 @@ def main():
         except Exception as e:
             print("Failed to decode response:", e)
             # print("Raw response bytes:", resp.hex())
+
+def run_test():
+    method_list=['POST','GET','PUT','DELETE']
+    scheme_list=['http']
+    path_list=['/grpc.testing.TestService/UnaryCall','/grpc.testing.TestService/BadUnaryCall']
+    authority_list=['localhost']
+    content_type_list=['application/grpc', 'application/grpc+proto']
+    traliers_list=['trailers', 'trailers+grpc']
+    response_size_list=[10, 100, 500]
+    body_byte_list=[b'\x44', b'\x42']
+    if_msg_test_list=[True, False]
+    
+    cnt=0
+    for method in method_list:
+        for scheme in scheme_list:
+            for path in path_list:
+                for authority in authority_list:
+                    for content_type in content_type_list:
+                        for traliers in traliers_list:
+                            for response_size in response_size_list:
+                                for body_byte in body_byte_list:
+                                    for if_msg_test in if_msg_test_list:
+                                        print("\n\nThe test %d is running..." % cnt)
+                                        cnt += 1
+                                        print(f"Testing {method} {scheme} {path} {authority} {content_type} {traliers} {response_size} {body_byte} {if_msg_test}")
+                                        res=grpc_request(
+                                            method=method,
+                                            scheme=scheme,
+                                            path=path,
+                                            authority=authority,
+                                            content_type=content_type,
+                                            traliers=traliers,
+                                            response_size=response_size,
+                                            body_byte=body_byte,
+                                            if_msg_test=if_msg_test
+                                        )
+                                        if res:
+                                            print(f"Received response: {res.payload.body}... (length={len(res.payload.body)})")
+                                        else:
+                                            print("No response received or failed to decode.")
+def main():
+    #arg parser
+    parser = argparse.ArgumentParser(description="gRPC client tester")
+    parser.add_argument('--run_test', action='store_true', help="Run the full test suite")
+    parser.add_argument('--single_test', action='store_true', help="Run a single gRPC request test")
+    args = parser.parse_args()
+
+    if args.run_test:
+        # Run the full test suite
+        print("Running full gRPC test suite...")
+        run_test()
+    elif args.single_test:
+        # Run a single gRPC request test
+        print("Running single gRPC request test...")
+        single_test()
+    #Testing single gRPC request
+    # print("Recieve payload from gRPC server:", single_test())
+    ## End Testing single gRPC request
+
 
 
 if __name__ == "__main__":
