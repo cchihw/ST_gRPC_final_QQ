@@ -10,7 +10,7 @@ import h2.connection
 import handlers
 
 HOST = '0.0.0.0'
-PORT = 50051  # 標準 gRPC port
+PORT = 50051
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,6 +42,7 @@ def handle_client_connection(conn, addr):
 
 def main():
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((HOST, PORT))
     server_socket.listen(5)
     logging.info(f"gRPC test server listening on {HOST}:{PORT}")
