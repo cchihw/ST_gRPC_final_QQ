@@ -8,8 +8,14 @@ def run():
     stub = messages_pb2_grpc.TestServiceStub(channel)
 
     request = messages_pb2.SimpleRequest(response_size=10)
-    response = stub.UnaryCall(request)
-    print("Received:", response)
+    try:
+        response = stub.UnaryCall(request)
+        print("Received:", response)
+    except grpc.RpcError as e:
+        print("[!] gRPC Error Caught")
+        print(" - code   :", e.code()) 
+        print(" - details:", e.details())   
+        print(" - trailing metadata:", e.trailing_metadata())
 
 if __name__ == "__main__":
     run()
