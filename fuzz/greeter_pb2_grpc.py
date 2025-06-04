@@ -34,17 +34,17 @@ class GreeterStub(object):
         Args:
             channel: A grpc.Channel.
         """
-        self.SayHello = channel.unary_unary(
-                '/greeter.Greeter/SayHello',
-                request_serializer=greeter__pb2.HelloRequest.SerializeToString,
-                response_deserializer=greeter__pb2.HelloReply.FromString,
+        self.SendData = channel.unary_unary(
+                '/greeter.Greeter/SendData',
+                request_serializer=greeter__pb2.TestMessage.SerializeToString,
+                response_deserializer=greeter__pb2.TestResponse.FromString,
                 _registered_method=True)
 
 
 class GreeterServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def SayHello(self, request, context):
+    def SendData(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -53,10 +53,10 @@ class GreeterServicer(object):
 
 def add_GreeterServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'SayHello': grpc.unary_unary_rpc_method_handler(
-                    servicer.SayHello,
-                    request_deserializer=greeter__pb2.HelloRequest.FromString,
-                    response_serializer=greeter__pb2.HelloReply.SerializeToString,
+            'SendData': grpc.unary_unary_rpc_method_handler(
+                    servicer.SendData,
+                    request_deserializer=greeter__pb2.TestMessage.FromString,
+                    response_serializer=greeter__pb2.TestResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -70,7 +70,7 @@ class Greeter(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
-    def SayHello(request,
+    def SendData(request,
             target,
             options=(),
             channel_credentials=None,
@@ -83,9 +83,9 @@ class Greeter(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/greeter.Greeter/SayHello',
-            greeter__pb2.HelloRequest.SerializeToString,
-            greeter__pb2.HelloReply.FromString,
+            '/greeter.Greeter/SendData',
+            greeter__pb2.TestMessage.SerializeToString,
+            greeter__pb2.TestResponse.FromString,
             options,
             channel_credentials,
             insecure,
